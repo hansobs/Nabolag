@@ -1,10 +1,12 @@
 // api/events.js
-// Vercel serverless handler for Slack team_join events.
+// Vercel serverless handler for Slack team_join and user_change events
 // - Verifies Slack signature
 // - Handles url_verification
-// - On team_join: adds user to usergroups and invites to channels
+// - Adds users to usergroups + invites to channels
 
 const crypto = require('crypto');
+
+// ------------------- Helpers -------------------
 
 async function getRawBody(req) {
   return new Promise((resolve, reject) => {
@@ -34,7 +36,6 @@ function verifySlackRequest(rawBody, headers) {
   hmac.update(base);
   const mySig = `v0=${hmac.digest('hex')}`;
 
-  // Use constant-time compare
   return crypto.timingSafeEqual(Buffer.from(mySig), Buffer.from(sig));
 }
 
@@ -58,13 +59,12 @@ async function addUserToUsergroups(userId) {
   const results = [];
 
   for (const ug of ugIDs) {
-    // Get current members
     const listRes = await slackApi('usergroups.users.list', { usergroup: ug });
     if (!listRes.ok) {
       results.push({ usergroup: ug, ok: false, error: listRes.error });
       continue;
     }
-    const currentUsers = listRes.users || []; // array of user IDs
+    const currentUsers = listRes.users || [];
     if (currentUsers.includes(userId)) {
       results.push({ usergroup: ug, ok: true, updated: false, reason: 'already a member' });
       continue;
@@ -86,18 +86,17 @@ async function inviteUserToChannels(userId) {
 
   const results = [];
   for (const ch of chIDs) {
-    // For public channels, conversations.invite should work if bot is a member.
-    // If bot is not member, conversations.join or inviting the bot first could be necessary.
     const inviteRes = await slackApi('conversations.invite', { channel: ch, users: userId }).catch(e => ({ ok:false, error: e.message }));
     if (inviteRes && inviteRes.ok) {
       results.push({ channel: ch, ok: true, invited: true });
     } else {
-      // If invite failed because bot not in channel, try conversations.join (for bot) then invite again
       results.push({ channel: ch, ok: false, error: inviteRes ? inviteRes.error : 'invite-failed' });
     }
   }
   return results;
 }
+
+// ------------------- Main Handler -------------------
 
 module.exports = async (req, res) => {
   try {
@@ -106,20 +105,15 @@ module.exports = async (req, res) => {
 
     // Verify Slack request
     if (!verifySlackRequest(rawBody, req.headers)) {
-      // Slack will test with url_verification which doesn't have signature; but Slack sends signature for that too.
-      // Fail safely if verification fails.
       console.warn('Slack verification failed');
       return res.status(401).send('verification failed');
     }
 
+    // Parse payload
     const payload = JSON.parse(rawBody);
+    console.log('Received Slack payload:', JSON.stringify(payload, null, 2));
 
-    console.log('Incoming Slack payload:');
-    console.dir(payload, { depth: null });  // prints entire object recursively
-    console.log('Raw body:', rawBody);
-
-
-    // Handle url_verification (initial verification)
+    // Handle url_verification (initial setup)
     if (payload.type === 'url_verification' && payload.challenge) {
       res.setHeader('content-type','text/plain');
       return res.status(200).send(payload.challenge);
@@ -131,24 +125,35 @@ module.exports = async (req, res) => {
     }
 
     const event = payload.event || {};
-    // Only act on team_join
-    if (event.type === 'team_join' && event.user && event.user.id) {
-      const userId = event.user.id;
+    const user = event.user || event.user?.user; // handle user_change nested object
+    const userId = user?.id;
 
-      // Do the work (add to usergroups + invite to channels)
-      const ugResult = await addUserToUsergroups(userId);
-      const chResult = await inviteUserToChannels(userId);
-
-      // Optionally: send a welcome message (uncomment with chat:write scope)
-      // await slackApi('chat.postMessage', { channel: userId, text: "Velkommen!" });
-
-      return res.status(200).json({ ok: true, user: userId, usergroups: ugResult, channels: chResult });
+    if (!userId) {
+      console.log('No userId found in event, ignoring.');
+      return res.status(200).send('ignored');
     }
 
-    // For other events: respond OK quickly
+    // ---------- TEAM_JOIN ----------
+    if (event.type === 'team_join') {
+      const ugResult = await addUserToUsergroups(userId);
+      const chResult = await inviteUserToChannels(userId);
+      console.log('team_join processed:', { userId, ugResult, chResult });
+      return res.status(200).json({ ok: true, eventType: 'team_join', user: userId, usergroups: ugResult, channels: chResult });
+    }
+
+    // ---------- USER_CHANGE (reactivated) ----------
+    if (event.type === 'user_change' && user.deleted === false) {
+      const ugResult = await addUserToUsergroups(userId);
+      const chResult = await inviteUserToChannels(userId);
+      console.log('user_change (reactivated) processed:', { userId, ugResult, chResult });
+      return res.status(200).json({ ok: true, eventType: 'user_reactivated', user: userId, usergroups: ugResult, channels: chResult });
+    }
+
+    // Other events are ignored
     return res.status(200).send('ignored');
+
   } catch (err) {
-    console.error('handler error', err);
+    console.error('Handler error:', err);
     return res.status(500).json({ ok: false, error: (err && err.message) || String(err) });
   }
 };
