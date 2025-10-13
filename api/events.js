@@ -114,6 +114,11 @@ module.exports = async (req, res) => {
 
     const payload = JSON.parse(rawBody);
 
+    console.log('Incoming Slack payload:');
+    console.dir(payload, { depth: null });  // prints entire object recursively
+    console.log('Raw body:', rawBody);
+
+
     // Handle url_verification (initial verification)
     if (payload.type === 'url_verification' && payload.challenge) {
       res.setHeader('content-type','text/plain');
