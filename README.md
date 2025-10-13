@@ -1,2 +1,0 @@
-# Nabolag
-code til nabolag
