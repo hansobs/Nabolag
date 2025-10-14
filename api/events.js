@@ -7,19 +7,6 @@ export default async function handler(req, res) {
     const payload = req.body;
     console.info("📩 Received Slack payload:", JSON.stringify(payload, null, 2));
 
-    // Log bot info to find correct bot user ID
-    try {
-      const authTest = await client.auth.test();
-      console.info("🤖 Bot auth info:", {
-        user_id: authTest.user_id,
-        user: authTest.user,
-        team: authTest.team,
-        team_id: authTest.team_id
-      });
-    } catch (authErr) {
-      console.error("❌ Auth test failed:", authErr);
-    }
-
     const event = payload.event;
     if (!event) return res.status(200).send("No event");
 
@@ -47,7 +34,6 @@ export default async function handler(req, res) {
     console.info(`🔍 Using token: ${process.env.SLACK_BOT_TOKEN.startsWith("xoxp") ? "User Token (xoxp)" : "Bot Token (xoxb)"}`);
     console.info("🔧 Raw USERGROUP_IDS env var:", process.env.USERGROUP_IDS);
     console.info("🧩 Target usergroups:", USERGROUP_IDS);
-    console.info("🤖 Bot User ID env var:", process.env.BOT_USER_ID);
 
     if (USERGROUP_IDS.length === 0) {
       console.warn("⚠️ No usergroups configured! Check USERGROUP_IDS environment variable");
@@ -71,11 +57,10 @@ export default async function handler(req, res) {
       }
     } catch (userErr) {
       console.error(`❌ Error fetching user info for ${userId}:`, userErr.data || userErr.message);
-      // Don't return here - let's try to proceed anyway
     }
 
     const ugResults = [];
-    const botUserId = process.env.BOT_USER_ID;
+    const botUserId = process.env.BOT_USER_ID || 'U09KDFQH3EF'; // fallback to discovered ID
 
     for (const ug of USERGROUP_IDS) {
       try {
@@ -92,9 +77,18 @@ export default async function handler(req, res) {
 
         // Clean the current users list - remove bot and any invalid entries
         const cleanCurrentUsers = (current.users || [])
-          .filter(id => id && id !== botUserId && id.startsWith('U')); // Only keep valid user IDs
+          .filter(id => {
+            const isValid = id && 
+                           id !== botUserId && 
+                           id.startsWith('U') && 
+                           id.length > 10; // Basic validation for Slack user ID format
+            if (!isValid && id) {
+              console.info(`🧹 Filtering out invalid/bot user: ${id}`);
+            }
+            return isValid;
+          });
         
-        console.info(`🧹 Cleaned user list for ${ug}:`, cleanCurrentUsers);
+        console.info(`🧹 Cleaned user list for ${ug} (removed bot ${botUserId}):`, cleanCurrentUsers);
         
         // Add the new user
         const updatedUsers = [...cleanCurrentUsers, userId];
@@ -106,7 +100,7 @@ export default async function handler(req, res) {
         });
 
         console.info(`✅ usergroups.users.update response for ${ug}:`, result);
-        ugResults.push({ usergroup: ug, ok: result.ok, updated: true, error: result.error });
+        ugResults.push({ usergroup: ug, ok: result.ok, updated: true });
         
       } catch (ugErr) {
         console.error(`❌ Error updating usergroup ${ug}:`, ugErr.data || ugErr.message || ugErr);
