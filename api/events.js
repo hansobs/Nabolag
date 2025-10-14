@@ -2,6 +2,10 @@ import { WebClient } from "@slack/web-api";
 
 const client = new WebClient(process.env.SLACK_BOT_TOKEN);
 
+// Simple in-memory cache to prevent duplicate processing
+const recentlyProcessed = new Map();
+const DUPLICATE_WINDOW = 30000; // 30 seconds
+
 export default async function handler(req, res) {
   try {
     const payload = req.body;
@@ -30,9 +34,30 @@ export default async function handler(req, res) {
       return res.status(200).send("Skipped");
     }
 
+    // Check for recent processing to avoid duplicates
+    const cacheKey = `${userId}-${triggeredBy}`;
+    const now = Date.now();
+    
+    if (recentlyProcessed.has(userId)) {
+      const lastProcessed = recentlyProcessed.get(userId);
+      if (now - lastProcessed < DUPLICATE_WINDOW) {
+        console.info(`⏰ User ${userId} was recently processed (${now - lastProcessed}ms ago), skipping ${triggeredBy}`);
+        return res.status(200).json({ ok: true, userId, skipped: true, reason: 'recently_processed' });
+      }
+    }
+
+    // Mark as being processed
+    recentlyProcessed.set(userId, now);
+    
+    // Clean up old entries (simple cleanup)
+    for (const [key, timestamp] of recentlyProcessed.entries()) {
+      if (now - timestamp > DUPLICATE_WINDOW) {
+        recentlyProcessed.delete(key);
+      }
+    }
+
     console.info(`⚙️ Processing ${triggeredBy} for ${userId}`);
     console.info(`🔍 Using token: ${process.env.SLACK_BOT_TOKEN.startsWith("xoxp") ? "User Token (xoxp)" : "Bot Token (xoxb)"}`);
-    console.info("🔧 Raw USERGROUP_IDS env var:", process.env.USERGROUP_IDS);
     console.info("🧩 Target usergroups:", USERGROUP_IDS);
 
     if (USERGROUP_IDS.length === 0) {
@@ -60,13 +85,12 @@ export default async function handler(req, res) {
     }
 
     const ugResults = [];
-    const botUserId = process.env.BOT_USER_ID || 'U09KDFQH3EF'; // fallback to discovered ID
+    const botUserId = process.env.BOT_USER_ID || 'U09KDFQH3EF';
 
     for (const ug of USERGROUP_IDS) {
       try {
         // Fetch existing members
         const current = await client.usergroups.users.list({ usergroup: ug });
-        console.info(`👥 Current members of ${ug}:`, current.users);
 
         // Check if user is already in the group
         if (current.users && current.users.includes(userId)) {
@@ -81,25 +105,21 @@ export default async function handler(req, res) {
             const isValid = id && 
                            id !== botUserId && 
                            id.startsWith('U') && 
-                           id.length > 10; // Basic validation for Slack user ID format
-            if (!isValid && id) {
-              console.info(`🧹 Filtering out invalid/bot user: ${id}`);
-            }
+                           id.length > 10;
             return isValid;
           });
         
-        console.info(`🧹 Cleaned user list for ${ug} (removed bot ${botUserId}):`, cleanCurrentUsers);
+        console.info(`🧹 Adding ${userId} to usergroup ${ug}`);
         
         // Add the new user
         const updatedUsers = [...cleanCurrentUsers, userId];
-        console.info(`🧮 Attempting to update ${ug} with users:`, updatedUsers);
 
         const result = await client.usergroups.users.update({
           usergroup: ug,
           users: updatedUsers.join(","),
         });
 
-        console.info(`✅ usergroups.users.update response for ${ug}:`, result);
+        console.info(`✅ Successfully added ${userId} to ${ug}`);
         ugResults.push({ usergroup: ug, ok: result.ok, updated: true });
         
       } catch (ugErr) {
@@ -110,7 +130,7 @@ export default async function handler(req, res) {
 
     console.info(`🎯 Finished processing ${triggeredBy} for ${userId}`, { ugResults });
 
-    return res.status(200).json({ ok: true, userId, ugResults });
+    return res.status(200).json({ ok: true, userId, ugResults, processedEvent: triggeredBy });
   } catch (err) {
     console.error("💥 Handler error:", err);
     res.status(500).json({ ok: false, error: err.message });
