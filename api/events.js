@@ -53,30 +53,49 @@ async function slackApi(path, bodyObj) {
 }
 
 async function addUserToUsergroups(userId) {
-  const ugIDs = (process.env.USERGROUP_IDS || '').split(',').map(s=>s.trim()).filter(Boolean);
+  const ugIDs = (process.env.USERGROUP_IDS || '')
+    .split(',')
+    .map(s => s.trim())
+    .filter(Boolean);
   if (!ugIDs.length) return { skipped: true };
 
+  const botUserId = process.env.BOT_USER_ID; // set this in Vercel
   const results = [];
 
   for (const ug of ugIDs) {
+    // Get current members
     const listRes = await slackApi('usergroups.users.list', { usergroup: ug });
     if (!listRes.ok) {
       results.push({ usergroup: ug, ok: false, error: listRes.error });
       continue;
     }
-    const currentUsers = listRes.users || [];
+
+    // Clean up current user list
+    const currentUsers = (listRes.users || [])
+      .filter(id => id && id !== botUserId); // remove bot and invalid IDs
+
+    // Skip if user already in group
     if (currentUsers.includes(userId)) {
       results.push({ usergroup: ug, ok: true, updated: false, reason: 'already a member' });
       continue;
     }
+
+    // Add user to list
     const newUsers = [...currentUsers, userId].join(',');
-    const updRes = await slackApi('usergroups.users.update', { usergroup: ug, users: newUsers });
+
+    // Update usergroup membership
+    const updRes = await slackApi('usergroups.users.update', {
+      usergroup: ug,
+      users: newUsers,
+    });
+
     if (!updRes.ok) {
       results.push({ usergroup: ug, ok: false, error: updRes.error });
     } else {
       results.push({ usergroup: ug, ok: true, updated: true });
     }
   }
+
   return results;
 }
 
