@@ -7,6 +7,19 @@ export default async function handler(req, res) {
     const payload = req.body;
     console.info("📩 Received Slack payload:", JSON.stringify(payload, null, 2));
 
+    // Log bot info to find correct bot user ID
+    try {
+      const authTest = await client.auth.test();
+      console.info("🤖 Bot auth info:", {
+        user_id: authTest.user_id,
+        user: authTest.user,
+        team: authTest.team,
+        team_id: authTest.team_id
+      });
+    } catch (authErr) {
+      console.error("❌ Auth test failed:", authErr);
+    }
+
     const event = payload.event;
     if (!event) return res.status(200).send("No event");
 
@@ -34,13 +47,35 @@ export default async function handler(req, res) {
     console.info(`🔍 Using token: ${process.env.SLACK_BOT_TOKEN.startsWith("xoxp") ? "User Token (xoxp)" : "Bot Token (xoxb)"}`);
     console.info("🔧 Raw USERGROUP_IDS env var:", process.env.USERGROUP_IDS);
     console.info("🧩 Target usergroups:", USERGROUP_IDS);
+    console.info("🤖 Bot User ID env var:", process.env.BOT_USER_ID);
 
     if (USERGROUP_IDS.length === 0) {
       console.warn("⚠️ No usergroups configured! Check USERGROUP_IDS environment variable");
       return res.status(200).json({ ok: true, userId, warning: "No usergroups configured" });
     }
 
+    // Validate the user exists and is active
+    try {
+      const userInfo = await client.users.info({ user: userId });
+      console.info(`👤 User info for ${userId}:`, {
+        name: userInfo.user?.name,
+        deleted: userInfo.user?.deleted,
+        is_restricted: userInfo.user?.is_restricted,
+        is_ultra_restricted: userInfo.user?.is_ultra_restricted,
+        is_bot: userInfo.user?.is_bot
+      });
+      
+      if (userInfo.user?.deleted) {
+        console.warn(`⚠️ User ${userId} is deleted, skipping`);
+        return res.status(200).json({ ok: true, userId, warning: "User is deleted" });
+      }
+    } catch (userErr) {
+      console.error(`❌ Error fetching user info for ${userId}:`, userErr.data || userErr.message);
+      // Don't return here - let's try to proceed anyway
+    }
+
     const ugResults = [];
+    const botUserId = process.env.BOT_USER_ID;
 
     for (const ug of USERGROUP_IDS) {
       try {
@@ -55,8 +90,14 @@ export default async function handler(req, res) {
           continue;
         }
 
+        // Clean the current users list - remove bot and any invalid entries
+        const cleanCurrentUsers = (current.users || [])
+          .filter(id => id && id !== botUserId && id.startsWith('U')); // Only keep valid user IDs
+        
+        console.info(`🧹 Cleaned user list for ${ug}:`, cleanCurrentUsers);
+        
         // Add the new user
-        const updatedUsers = Array.from(new Set([...(current.users || []), userId]));
+        const updatedUsers = [...cleanCurrentUsers, userId];
         console.info(`🧮 Attempting to update ${ug} with users:`, updatedUsers);
 
         const result = await client.usergroups.users.update({
@@ -66,6 +107,7 @@ export default async function handler(req, res) {
 
         console.info(`✅ usergroups.users.update response for ${ug}:`, result);
         ugResults.push({ usergroup: ug, ok: result.ok, updated: true, error: result.error });
+        
       } catch (ugErr) {
         console.error(`❌ Error updating usergroup ${ug}:`, ugErr.data || ugErr.message || ugErr);
         ugResults.push({ usergroup: ug, ok: false, error: ugErr.data?.error || ugErr.message });
