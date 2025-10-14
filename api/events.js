@@ -25,10 +25,10 @@ export default async function handler(req, res) {
     }
 
     // The usergroups we want to add the user to
-    const USERGROUP_IDS = [
-      process.env.USERGROUP_1,
-      process.env.USERGROUP_2
-    ].filter(Boolean);
+    const ugIDs = (process.env.USERGROUP_IDS || '')
+      .split(',')
+      .map(s => s.trim())
+      .filter(Boolean);
 
     console.info(`⚙️ Processing ${triggeredBy} for ${userId}`);
     console.info(`🔍 Using token: ${process.env.SLACK_BOT_TOKEN.startsWith("xoxp") ? "User Token (xoxp)" : "Bot Token (xoxb)"}`);
