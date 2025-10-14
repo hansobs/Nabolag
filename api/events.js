@@ -13,6 +13,12 @@ export default async function handler(req, res) {
     const user = event.user;
     const userId = user?.id;
 
+    // Define USERGROUP_IDS at the top level
+    const USERGROUP_IDS = (process.env.USERGROUP_IDS || '')
+      .split(',')
+      .map(s => s.trim())
+      .filter(Boolean);
+
     // Which event type?
     const type = event.type;
     let triggeredBy = "";
@@ -24,15 +30,15 @@ export default async function handler(req, res) {
       return res.status(200).send("Skipped");
     }
 
-    // The usergroups we want to add the user to
-    const ugIDs = (process.env.USERGROUP_IDS || '')
-      .split(',')
-      .map(s => s.trim())
-      .filter(Boolean);
-
     console.info(`⚙️ Processing ${triggeredBy} for ${userId}`);
     console.info(`🔍 Using token: ${process.env.SLACK_BOT_TOKEN.startsWith("xoxp") ? "User Token (xoxp)" : "Bot Token (xoxb)"}`);
+    console.info("🔧 Raw USERGROUP_IDS env var:", process.env.USERGROUP_IDS);
     console.info("🧩 Target usergroups:", USERGROUP_IDS);
+
+    if (USERGROUP_IDS.length === 0) {
+      console.warn("⚠️ No usergroups configured! Check USERGROUP_IDS environment variable");
+      return res.status(200).json({ ok: true, userId, warning: "No usergroups configured" });
+    }
 
     const ugResults = [];
 
@@ -42,7 +48,14 @@ export default async function handler(req, res) {
         const current = await client.usergroups.users.list({ usergroup: ug });
         console.info(`👥 Current members of ${ug}:`, current.users);
 
-        // Add the new user if missing
+        // Check if user is already in the group
+        if (current.users && current.users.includes(userId)) {
+          console.info(`👤 User ${userId} already in usergroup ${ug}`);
+          ugResults.push({ usergroup: ug, ok: true, updated: false, reason: 'already a member' });
+          continue;
+        }
+
+        // Add the new user
         const updatedUsers = Array.from(new Set([...(current.users || []), userId]));
         console.info(`🧮 Attempting to update ${ug} with users:`, updatedUsers);
 
@@ -52,7 +65,7 @@ export default async function handler(req, res) {
         });
 
         console.info(`✅ usergroups.users.update response for ${ug}:`, result);
-        ugResults.push({ usergroup: ug, ok: result.ok, error: result.error });
+        ugResults.push({ usergroup: ug, ok: result.ok, updated: true, error: result.error });
       } catch (ugErr) {
         console.error(`❌ Error updating usergroup ${ug}:`, ugErr.data || ugErr.message || ugErr);
         ugResults.push({ usergroup: ug, ok: false, error: ugErr.data?.error || ugErr.message });
