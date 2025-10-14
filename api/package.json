@@ -1,0 +1,9 @@
+{
+  "name": "slack-events-handler",
+  "version": "1.0.0",
+  "description": "Slack event handler for team_join and user_change events",
+  "main": "api/events.js",
+  "dependencies": {
+    "@slack/web-api": "^7.1.0"
+  }
+}
