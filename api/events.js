@@ -22,14 +22,26 @@ const USERGROUP_INFO = {
 
 async function sendWelcomeMessage(userId, addedGroups) {
   try {
-    // Open a DM channel with the user
-    const dmChannel = await client.conversations.open({
-      users: userId
-    });
+    let dmChannelId = null;
 
-    if (!dmChannel.ok) {
-      console.error('❌ Failed to open DM channel:', dmChannel.error);
-      return { ok: false, error: dmChannel.error };
+    // Try method 1: conversations.open (should work with mpim:write)
+    try {
+      const dmChannel = await client.conversations.open({
+        users: userId
+      });
+      
+      if (dmChannel.ok) {
+        dmChannelId = dmChannel.channel.id;
+        console.info(`✅ Opened DM channel via conversations.open: ${dmChannelId}`);
+      }
+    } catch (convError) {
+      console.warn(`⚠️ conversations.open failed, trying fallback:`, convError.message);
+    }
+
+    // Fallback method 2: Send directly to user ID
+    if (!dmChannelId) {
+      dmChannelId = userId;
+      console.info(`🔄 Using fallback: sending directly to user ID ${userId}`);
     }
 
     // Build the welcome message in Danish
@@ -57,7 +69,7 @@ async function sendWelcomeMessage(userId, addedGroups) {
 
     // Send the welcome message
     const messageResult = await client.chat.postMessage({
-      channel: dmChannel.channel.id,
+      channel: dmChannelId,
       text: welcomeText,
       blocks: [
         {
@@ -83,8 +95,8 @@ async function sendWelcomeMessage(userId, addedGroups) {
     });
 
     if (messageResult.ok) {
-      console.info(`✅ Velkomstbesked sendt til ${userId}`);
-      return { ok: true, channel: dmChannel.channel.id, ts: messageResult.ts };
+      console.info(`✅ Velkomstbesked sendt til ${userId} via kanal ${dmChannelId}`);
+      return { ok: true, channel: dmChannelId, ts: messageResult.ts };
     } else {
       console.error(`❌ Kunne ikke sende velkomstbesked til ${userId}:`, messageResult.error);
       return { ok: false, error: messageResult.error };
