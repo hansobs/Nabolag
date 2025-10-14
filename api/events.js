@@ -1,6 +1,8 @@
 import { WebClient } from "@slack/web-api";
 
-const client = new WebClient(process.env.SLACK_BOT_TOKEN);
+// Create two clients - one for each token type
+const userClient = new WebClient(process.env.SLACK_USER_TOKEN); // xoxp token
+const botClient = new WebClient(process.env.SLACK_BOT_TOKEN);   // xoxb token
 
 // Simple in-memory cache to prevent duplicate processing
 const recentlyProcessed = new Map();
@@ -24,18 +26,18 @@ async function sendWelcomeMessage(userId, addedGroups) {
   try {
     let dmChannelId = null;
 
-    // Try method 1: conversations.open (should work with mpim:write)
+    // Try method 1: conversations.open using bot client
     try {
-      const dmChannel = await client.conversations.open({
+      const dmChannel = await botClient.conversations.open({
         users: userId
       });
       
       if (dmChannel.ok) {
         dmChannelId = dmChannel.channel.id;
-        console.info(`✅ Opened DM channel via conversations.open: ${dmChannelId}`);
+        console.info(`✅ Opened DM channel via bot conversations.open: ${dmChannelId}`);
       }
     } catch (convError) {
-      console.warn(`⚠️ conversations.open failed, trying fallback:`, convError.message);
+      console.warn(`⚠️ Bot conversations.open failed, trying fallback:`, convError.message);
     }
 
     // Fallback method 2: Send directly to user ID
@@ -67,8 +69,8 @@ async function sendWelcomeMessage(userId, addedGroups) {
     welcomeText += `🤝 Hvis du har spørgsmål om fællesskabet eller disse grupper, så spørg endelig!\n\n`;
     welcomeText += `_Du kan administrere dine notifikationsindstillinger i dine Slack-indstillinger._`;
 
-    // Send the welcome message
-    const messageResult = await client.chat.postMessage({
+    // Send the welcome message using BOT client
+    const messageResult = await botClient.chat.postMessage({
       channel: dmChannelId,
       text: welcomeText,
       blocks: [
@@ -95,7 +97,7 @@ async function sendWelcomeMessage(userId, addedGroups) {
     });
 
     if (messageResult.ok) {
-      console.info(`✅ Velkomstbesked sendt til ${userId} via kanal ${dmChannelId}`);
+      console.info(`✅ Velkomstbesked sendt som bot til ${userId} via kanal ${dmChannelId}`);
       return { ok: true, channel: dmChannelId, ts: messageResult.ts };
     } else {
       console.error(`❌ Kunne ikke sende velkomstbesked til ${userId}:`, messageResult.error);
@@ -158,7 +160,8 @@ export default async function handler(req, res) {
     }
 
     console.info(`⚙️ Behandler ${triggeredBy} for ${userId}`);
-    console.info(`🔍 Bruger token: ${process.env.SLACK_BOT_TOKEN.startsWith("xoxp") ? "User Token (xoxp)" : "Bot Token (xoxb)"}`);
+    console.info(`🔍 Bruger user token: ${process.env.SLACK_USER_TOKEN?.startsWith("xoxp") ? "User Token (xoxp)" : "Invalid/Missing"}`);
+    console.info(`🤖 Bruger bot token: ${process.env.SLACK_BOT_TOKEN?.startsWith("xoxb") ? "Bot Token (xoxb)" : "Invalid/Missing"}`);
     console.info("🧩 Målgrupper:", USERGROUP_IDS);
 
     if (USERGROUP_IDS.length === 0) {
@@ -166,9 +169,9 @@ export default async function handler(req, res) {
       return res.status(200).json({ ok: true, userId, warning: "No usergroups configured" });
     }
 
-    // Validate the user exists and is active
+    // Validate the user exists and is active (using user client)
     try {
-      const userInfo = await client.users.info({ user: userId });
+      const userInfo = await userClient.users.info({ user: userId });
       console.info(`👤 Brugerinfo for ${userId}:`, {
         name: userInfo.user?.name,
         real_name: userInfo.user?.real_name,
@@ -190,10 +193,11 @@ export default async function handler(req, res) {
     const addedToGroups = [];
     const botUserId = process.env.BOT_USER_ID || 'U09KDFQH3EF';
 
+    // Use USER CLIENT for usergroup operations
     for (const ug of USERGROUP_IDS) {
       try {
-        // Fetch existing members
-        const current = await client.usergroups.users.list({ usergroup: ug });
+        // Fetch existing members using user client
+        const current = await userClient.usergroups.users.list({ usergroup: ug });
 
         // Check if user is already in the group
         if (current.users && current.users.includes(userId)) {
@@ -214,10 +218,10 @@ export default async function handler(req, res) {
         
         console.info(`🧹 Tilføjer ${userId} til brugergruppe ${ug}`);
         
-        // Add the new user
+        // Add the new user using user client
         const updatedUsers = [...cleanCurrentUsers, userId];
 
-        const result = await client.usergroups.users.update({
+        const result = await userClient.usergroups.users.update({
           usergroup: ug,
           users: updatedUsers.join(","),
         });
@@ -236,10 +240,10 @@ export default async function handler(req, res) {
       }
     }
 
-    // Send welcome message if user was added to any groups
+    // Send welcome message if user was added to any groups (using BOT client)
     let welcomeMessageResult = null;
     if (addedToGroups.length > 0) {
-      console.info(`📨 Sender velkomstbesked til ${userId} for grupper: ${addedToGroups.join(', ')}`);
+      console.info(`📨 Sender velkomstbesked som bot til ${userId} for grupper: ${addedToGroups.join(', ')}`);
       welcomeMessageResult = await sendWelcomeMessage(userId, addedToGroups);
     }
 
