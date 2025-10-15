@@ -206,24 +206,19 @@ export default async function handler(req, res) {
           continue;
         }
 
-        // Clean the current users list - remove admin user only if they're not the one being added
         const cleanCurrentUsers = (current.users || [])
           .filter(id => {
-            const isValid = id && 
-                           id.startsWith('U') && 
-                           id.length > 10;
-            
-            // Don't filter out the admin user if they're the one being added
-            const shouldExcludeAdmin = id === botUserId && userId !== botUserId;
-            
-            return isValid && !shouldExcludeAdmin;
+            // Only filter out invalid user IDs, keep ALL valid users
+            return id && 
+                   id.startsWith('U') && 
+                   id.length > 10;
           });
         
         console.info(`🧹 Tilføjer ${userId} til brugergruppe ${ug}`);
         
         // Add the new user using user client
         const updatedUsers = [...cleanCurrentUsers, userId];
-
+        
         const result = await userClient.usergroups.users.update({
           usergroup: ug,
           users: updatedUsers.join(","),
