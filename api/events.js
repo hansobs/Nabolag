@@ -206,14 +206,17 @@ export default async function handler(req, res) {
           continue;
         }
 
-        // Clean the current users list - remove bot and any invalid entries
+        // Clean the current users list - remove admin user only if they're not the one being added
         const cleanCurrentUsers = (current.users || [])
           .filter(id => {
             const isValid = id && 
-                           id !== botUserId && 
                            id.startsWith('U') && 
                            id.length > 10;
-            return isValid;
+            
+            // Don't filter out the admin user if they're the one being added
+            const shouldExcludeAdmin = id === botUserId && userId !== botUserId;
+            
+            return isValid && !shouldExcludeAdmin;
           });
         
         console.info(`🧹 Tilføjer ${userId} til brugergruppe ${ug}`);
