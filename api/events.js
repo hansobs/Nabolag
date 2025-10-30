@@ -1,8 +1,51 @@
 import { WebClient } from "@slack/web-api";
+import crypto from "crypto";
+
+// If running under Next.js API Routes, disable built-in body parsing
+export const config = {
+  api: {
+    bodyParser: false,
+  },
+};
 
 // Create two clients - one for each token type
 const userClient = new WebClient(process.env.SLACK_USER_TOKEN); // xoxp token
 const botClient = new WebClient(process.env.SLACK_BOT_TOKEN);   // xoxb token
+
+// Helpers for Slack request verification
+async function getRawBody(req) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    req.on('data', (c) => chunks.push(c));
+    req.on('end', () => resolve(Buffer.concat(chunks)));
+    req.on('error', reject);
+  });
+}
+
+function verifySlackRequest(rawBody, headers) {
+  const signingSecret = process.env.SLACK_SIGNING_SECRET;
+  if (!signingSecret) return false;
+
+  const ts = headers['x-slack-request-timestamp'];
+  const sig = headers['x-slack-signature'];
+  if (!ts || !sig) return false;
+
+  // Protect against replay attacks (5 minutes)
+  const fiveMinutes = 60 * 5;
+  const now = Math.floor(Date.now() / 1000);
+  if (Math.abs(now - Number(ts)) > fiveMinutes) return false;
+
+  const base = `v0:${ts}:${rawBody}`;
+  const hmac = crypto.createHmac('sha256', signingSecret);
+  hmac.update(base);
+  const mySig = `v0=${hmac.digest('hex')}`;
+
+  try {
+    return crypto.timingSafeEqual(Buffer.from(mySig), Buffer.from(sig));
+  } catch (_) {
+    return false;
+  }
+}
 
 // Simple in-memory cache to prevent duplicate processing
 const recentlyProcessed = new Map();
@@ -112,7 +155,24 @@ async function sendWelcomeMessage(userId, addedGroups) {
 
 export default async function handler(req, res) {
   try {
-    const payload = req.body;
+    // Read raw body for Slack signature verification
+    const rawBuf = await getRawBody(req);
+    const rawBody = rawBuf.toString('utf8');
+
+    // Verify Slack request signature
+    if (!verifySlackRequest(rawBody, req.headers)) {
+      console.warn('Slack verification failed');
+      return res.status(401).send('verification failed');
+    }
+
+    // Parse payload after verification
+    const payload = JSON.parse(rawBody);
+
+    // Handle initial URL verification challenge
+    if (payload.type === 'url_verification' && payload.challenge) {
+      res.setHeader('content-type', 'text/plain');
+      return res.status(200).send(payload.challenge);
+    }
     console.info("📩 Received Slack payload:", JSON.stringify(payload, null, 2));
 
     const event = payload.event;
